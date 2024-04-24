@@ -69,6 +69,7 @@
 #include "../inc/I2CB1.h"
 #include "../inc/CortexM.h"
 #include "../inc/opt3101.h"
+#include "../inc/Reflectance.h"
 
 /*
  * Values for below macros shall be modified per the access-point's (AP) properties
@@ -161,6 +162,8 @@ uint32_t DistanceSysTickMsTimer;
 
 uint32_t SysTick_Count;
 uint32_t SysTick_Count_Full;             // Does not reset after power on
+
+uint8_t Reflectance_Value = 0;
 
 /*
  * GLOBAL VARIABLES -- End
@@ -298,6 +301,12 @@ void Stop() {
     char dataStr[10];
     sprintf(dataStr, "%d", SysTick_Count_Full);
     SendMQTT("ECE1188ThorStop", dataStr, 10);
+
+    while(1) {
+        // Infinite loop
+        // Stop doing everything
+        // Race is over
+    }
 }
 
 // Function to send a message via MQTT to a topic
@@ -345,8 +354,15 @@ void SysTick_HandlerMain() {
         DoTach();
         break;
     case 2:
+        // Start reading reflectance
+        Reflectance_Start();
         break;
     case 3:
+        // Stop readin reflectance
+        Reflectance_Value = Reflectance_End();
+        if (Reflectance_Value) {
+            Stop();
+        }
         break;
     case 4:
         break;
