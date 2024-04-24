@@ -1,0 +1,17 @@
+int uart_read(int dev_fd, char *buf, unsigned count){char mk;
+  mk = UART0_InChar();    // receive from keyboard
+  mk = *buf;         // return by reference
+  UART0_OutChar(mk);  // echo
+  return 1;
+}
+int uart_write(int dev_fd, const char *buf, unsigned count){ unsigned int num=count;
+    while(num){
+        if(*buf == 10){
+           UART0_OutChar(13);
+        }
+        UART0_OutChar(*buf);
+        buf++;
+        num--;
+    }
+    return count;
+}
