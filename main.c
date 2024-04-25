@@ -63,21 +63,27 @@
 
 #include "../inc/Clock.h"
 #include "driverlib./MSP432P4xx/systick.h"
+#include "../inc/LaunchPad.h"
 #include "../inc/Motor.h"
 #include "../inc/Tachometer.h"
 #include "../inc/TA3InputCapture.h"
 #include "../inc/I2CB1.h"
 #include "../inc/CortexM.h"
+#include "../inc/LPF.h"
 #include "../inc/opt3101.h"
 #include "../inc/Reflectance.h"
+#include "../inc/Bump.h"
+#include "../inc/UART0.h"
+#include "../inc/SSD1306.h"
+#include "../inc/FFT.h"
 
 /*
  * Values for below macros shall be modified per the access-point's (AP) properties
  * SimpleLink device will connect to following AP when the application is executed
  */
-#define SSID_NAME       "ECE DESIGN LAB 2.4 "       /* Access point name to connect to. */
+#define SSID_NAME       "TheFCCWontLetMeBeMe"       /* Access point name to connect to. */
 #define SEC_TYPE        SL_SEC_TYPE_WPA_WPA2     /* Security type of the Access piont */
-#define PASSKEY         "ecedesignlab12345"   /* Password in case of secure AP */
+#define PASSKEY         "l3tm3inpls"   /* Password in case of secure AP */
 #define PASSKEY_LEN     pal_Strlen(PASSKEY)  /* Password length in case of secure AP */
 
 /*
@@ -196,6 +202,199 @@ void SendMQTT(const char*, void*, size_t);
  * STANDARD FUNCTION DEFINITIONS -- Start
  */
 
+// this batch configures for UART link to PC
+void UartSetCur(uint8_t newX, uint8_t newY){
+  if(newX == 6){
+    UART0_OutString("\n\rTxChannel= ");
+    UART0_OutUDec(newY-1);
+    UART0_OutString(" Distance= ");
+  }else{
+    UART0_OutString("\n\r");
+  }
+}
+void UartClear(void){
+    UART0_OutString("\n\r");
+};
+#define Init UART0_Init
+#define Clear UartClear
+#define SetCursor UartSetCur
+#define OutString UART0_OutString
+#define OutChar UART0_OutChar
+#define OutUDec UART0_OutUDec
+#define OutSDec UART0_OutSDec
+
+/*
+ * The below two functions filter the raw left and right opt3101 data into tangential distances from the wall.
+ *
+ */
+
+// calibrated for 500mm track
+// right is raw sensor data from right sensor
+// return calibrated distance from center of Robot to right wall
+int32_t Right(int32_t right){
+  return  (right*(59*right + 7305) + 2348974)/32768;
+}
+// left is raw sensor data from left sensor
+// return calibrated distance from center of Robot to left wall
+int32_t Left(int32_t left){
+  return (1247*left)/2048 + 22;
+}
+
+// assumes track is 500mm
+int32_t Mode=1; // 0 stop, 1 run
+int32_t Error;
+int32_t Ki=1;  // integral controller gain
+int32_t Kp=8;  // proportional controller gain //was 4
+int32_t Kd=0;
+int32_t UR, UL;  // PWM duty 0 to 14,998
+
+#define TOOCLOSE 200 //was 200
+#define DESIRED 250 //was 250
+int32_t SetPoint = 250; // mm //was 250
+int32_t LeftDistance,CenterDistance,RightDistance; // mm
+#define TOOFAR 500 // was 400
+
+#define PWMNOMINAL 5000 // was 2500
+#define SWING 3000 //was 1000
+#define PWMMIN (PWMNOMINAL-SWING)
+#define PWMMAX (PWMNOMINAL+SWING)
+void Controller(void){ // runs at 100 Hz
+  if(Mode){
+    if((LeftDistance>DESIRED)&&(RightDistance>DESIRED)){
+      SetPoint = (LeftDistance+RightDistance)/2;
+    }else{
+      SetPoint = DESIRED;
+    }
+    if(LeftDistance < RightDistance ){
+      Error = LeftDistance-SetPoint;
+//      UL = PWMNOMINAL+Kp*Error;
+//      UR = PWMNOMINAL-Kp*Error;
+    }else {
+      Error = SetPoint-RightDistance;
+//      UR = PWMNOMINAL+Kp*Error;
+//      UL = PWMNOMINAL-Kp*Error;
+    }
+//    if(Error<1000){
+//        Kp = Kp/2;
+//    }
+ //   UR = UR + Ki*Error;      // adjust right motor
+    UR = PWMNOMINAL+Kp*Error; // proportional control
+    UL = PWMNOMINAL-Kp*Error; // proportional control
+    if(UR < (PWMNOMINAL-SWING)) UR = PWMNOMINAL-SWING; // 3,000 to 7,000
+    if(UR > (PWMNOMINAL+SWING)) UR = PWMNOMINAL+SWING;
+    if(UL < (PWMNOMINAL-SWING)) UL = PWMNOMINAL-SWING; // 3,000 to 7,000
+    if(UL > (PWMNOMINAL+SWING)) UL = PWMNOMINAL+SWING;
+
+    if((RightDistance<250) && (CenterDistance <250)){
+        UL = 0;
+        UR = PWMNOMINAL;
+    }
+//    if((RightDistance<250)){
+//            UL = 0;
+//            UR = PWMNOMINAL;
+//        }
+    if((LeftDistance<250) && (CenterDistance <250)){
+            UL = PWMNOMINAL;
+            UR = 0;
+        }
+//    if((LeftDistance<250)){
+//                UL = PWMNOMINAL;
+//                UR = 0;
+//            }
+    Motor_Forward(UL,UR);
+//    if((LeftDistance<150) && (CenterDistance <150) && (RightDistance<250)){
+//                Pause();
+//            }
+
+  }
+}
+
+void Controller_Right(void){ // runs at 100 Hz
+  if(Mode){
+    if((RightDistance>DESIRED)){
+      SetPoint = (RightDistance)/2;
+    }else{
+      SetPoint = DESIRED;
+    }
+    /*if(LeftDistance < RightDistance ){
+      Error = LeftDistance-SetPoint;
+    }else {
+      Error = SetPoint-RightDistance;
+    }*/
+
+    Error = SetPoint-RightDistance;
+    //UR = UR + Ki*Error;      // adjust right motor
+    UR = PWMNOMINAL+Kp*Error; // proportional control
+    UR = UR + Ki*Error;      // adjust right motor
+    UL = PWMNOMINAL-Kp*Error; // proportional control
+    if(UR < (PWMNOMINAL-SWING)) UR = PWMNOMINAL-SWING; // 3,000 to 7,000
+    if(UR > (PWMNOMINAL+SWING)) UR = PWMNOMINAL+SWING;
+    if(UL < (PWMNOMINAL-SWING)) UL = PWMNOMINAL-SWING; // 3,000 to 7,000
+    if(UL > (PWMNOMINAL+SWING)) UL = PWMNOMINAL+SWING;
+
+    //turns left if the center measurement and right measurement is small enough that we will hit the wall if we don't turn
+    if((RightDistance<250) && (CenterDistance <250)){
+        UL = 0;
+        UR = PWMNOMINAL;
+    }
+
+    Motor_Forward(UL,UR);
+
+  }
+}
+void Pause(void){//int i;
+  while(Bump_Read()){ // wait for release
+    Clock_Delay1ms(500); LaunchPad_Output(0); // off
+    Clock_Delay1ms(500); LaunchPad_Output(1); // red
+    Motor_Backward(5000,3500);
+    Clock_Delay1ms(1500);
+  }
+  UR = UL = PWMNOMINAL;    // reset parameters
+  Mode = 1;
+
+}
+
+// triggered on touch, falling edge
+// Indicates a crash
+void PORT4_IRQHandler(void){
+
+    uint8_t bsMask = 0xED;
+    Clock_Delay1us(10);         // software debounce
+    P4->IFG &= ~bsMask;         // acknowledge and clear flag
+    P2->OUT ^= 0x02;             // toggle red LED on RGB LED
+    Motor_Stop();
+    Clock_Delay1ms(1000);         // Must wait 1 second, as per project requirements
+
+    while(1);               //Remove and implement crash recovery
+
+    /*                            // How to deal with a crash?
+    Motor_Backward(2500,2500);
+    Clock_Delay1ms(1000);
+    */
+
+}
+
+// Function to organize UART initialization, clearing, and printing of Intitialization data
+void UART_Init_Print(void) {
+      Init();                   // UART baud rate = 115,200
+      Clear();
+      OutString("OPT3101");
+      SetCursor(0, 1);
+      OutString("L=");
+      SetCursor(0, 2);
+      OutString("C=");
+      SetCursor(0, 3);
+      OutString("R=");
+      SetCursor(0, 4);
+      OutString("Wall follow");
+      SetCursor(0, 5);
+      OutString("SP=");
+      SetCursor(0, 6);
+      OutString("Er=");
+      SetCursor(0, 7);
+      OutString("U =");
+}
+
 // ------------avg------------
 // Simple math function that returns the average value of an array.
 // Input: array is an array of 16-bit unsigned numbers length is the number of elements in 'array'
@@ -274,6 +473,26 @@ void DoDistanceSensor(void) {
         sprintf(dataStr, "%d", Distances[2]);
         SendMQTT("ECE1188ThorDistR", dataStr, 10);
 
+        if(TxChannel==0){
+            if(Amplitudes[0] > 1000){
+                LeftDistance = FilteredDistances[0] = Left(LPF_Calc(Distances[0]));
+            }else{
+                LeftDistance = FilteredDistances[0] = 500;
+            }
+        }else if(TxChannel==1){
+            if(Amplitudes[1] > 1000){
+                CenterDistance = FilteredDistances[1] = LPF_Calc2(Distances[1]);
+            }else{
+                CenterDistance = FilteredDistances[1] = 500;
+            }
+        }else {
+            if(Amplitudes[2] > 1000){
+                RightDistance = FilteredDistances[2] = Right(LPF_Calc3(Distances[2]));
+            }else{
+                RightDistance = FilteredDistances[2] = 500;
+            }
+        }
+
         // Setup for next poll
         TxChannel++;
         if (TxChannel > 2) {
@@ -286,6 +505,7 @@ void DoDistanceSensor(void) {
 // Function to start race
 void Go() {
     // TODO: Implement other functions with controller
+    Mode = 1;
 
     // Inform GUI that race is starting
     char dataStr[10];
@@ -295,7 +515,8 @@ void Go() {
 
 // Function to stop race
 void Stop() {
-    // TODO: Implement other functions with controller
+    Mode = 0;
+    Motor_Stop();
 
     // Inform GUI that race is stopping
     char dataStr[10];
@@ -354,17 +575,30 @@ void SysTick_HandlerMain() {
         DoTach();
         break;
     case 2:
-        // Start reading reflectance
+        // Do reflectance
+        /*
         Reflectance_Start();
-        break;
-    case 3:
-        // Stop readin reflectance
+        Clock_Delay1ms(1);
         Reflectance_Value = Reflectance_End();
         if (Reflectance_Value) {
             Stop();
         }
+        */
+        break;
+    case 3:
+        // Stop reading reflectance
+
         break;
     case 4:
+
+        // Handle bump
+        /*
+        if (Bump_Read()) {
+            Mode = 0;
+            Motor_Stop();
+            Pause();
+            SendMQTT("ECE1188ThorCrash", "", 1);
+        }*/
         break;
     case 5:
         break;
@@ -373,8 +607,13 @@ void SysTick_HandlerMain() {
     case 7:
         break;
     case 8:
+        if ((char)(EUSCI_A0->RXBUF) == 's') {
+            Stop();
+        }
         break;
     case 9:
+        // Update controller
+        Controller();
         break;
     }
 
@@ -604,6 +843,8 @@ int main(int argc, char** argv)
     Tachometer_Init();
     EnableInterrupts();
 
+    Reflectance_Init();
+
     // Distance Sensor Init
     I2CB1_Init(30); // baud rate = 12MHz/30=400kHz
     OPT3101_Init();
@@ -611,12 +852,20 @@ int main(int argc, char** argv)
     OPT3101_CalibrateInternalCrosstalk();
     OPT3101_StartMeasurementChannel(1);
 
-    SysTick_registerInterrupt(SysTick_HandlerMain);
+    //SysTick_registerInterrupt(SysTick_HandlerMain);
 
     /* Configure command line interface */
     CLI_Configure();
 
     displayBanner();
+
+    Mode = 1;
+
+    LPF_Init(100,8);          // Setup FIR Filter
+    LPF_Init2(100,8);
+    LPF_Init3(100,8);
+
+    UR = UL = PWMNOMINAL;     //initial power
 
     /*
      * Following function configures the device to default state by cleaning
@@ -715,12 +964,24 @@ int main(int argc, char** argv)
     }
     CLI_Write(" Subscribed to uniqueID topic \n\r");
 
+    while (1) {
+        char bluetoothCmd = UART0_InChar();
+        if (bluetoothCmd == 'g') {
+            break;
+        }
+    }
+
+    Go();
+
     while(1){
         rc = MQTTYield(&hMQTTClient, 10);
         if (rc != 0) {
             CLI_Write(" MQTT failed to yield \n\r");
             LOOP_FOREVER();
         }
+
+        SysTick_HandlerMain();
+        Clock_Delay1ms(1);
     }
 }
 
