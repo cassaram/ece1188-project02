@@ -171,6 +171,8 @@ uint32_t SysTick_Count_Full;             // Does not reset after power on
 
 uint8_t Reflectance_Value = 0;
 
+double MaxSpeed = 0;
+
 /*
  * GLOBAL VARIABLES -- End
  */
@@ -201,6 +203,16 @@ void SendMQTT(const char*, void*, size_t);
 /*
  * STANDARD FUNCTION DEFINITIONS -- Start
  */
+
+// This funtion calculates speed from left and right RPM values
+double getSpeed() {
+    // Convert to meters per second on each wheel
+    double mpsL = ((ActualL * 220) / 100) / 60;
+    double mpsR = ((ActualR * 220) / 100) / 60;
+    // Get speed
+    double speed = (mpsL + mpsR) / 2;
+    return speed;
+}
 
 // this batch configures for UART link to PC
 void UartSetCur(uint8_t newX, uint8_t newY){
@@ -436,8 +448,8 @@ void DoTach(void) {
 
         //Compute the Average Revolutions Per Minute over the most recent  TACHBUFF # of Samples
         // (1/tach step/cycles) * (12,000,000 cycles/sec) * (60 sec/min) * (1/360 rotation/step)
-        ActualL = 2000000/avg(LeftTach, TACHBUFF);
-        ActualR = 2000000/avg(RightTach, TACHBUFF);
+        ActualL = 2000000/avg(&LeftTach, TACHBUFF);
+        ActualR = 2000000/avg(&RightTach, TACHBUFF);
 
         // Send Tach data to MQTT broker
         char dataStr[5];
@@ -449,6 +461,15 @@ void DoTach(void) {
         // RPM Right
         sprintf(dataStr, "%d", ActualR);
         SendMQTT("ECE1188ThorRPMR", dataStr, 5);
+
+        // Send max speed to MQTT broker
+        double speed = getSpeed();
+        if (speed > MaxSpeed) {
+            MaxSpeed = speed;
+            char speedStr[9];
+            sprintf(speedStr, "%02.6f", MaxSpeed);
+            SendMQTT("ECE1188ThorMaxSpeed", speedStr, 9);
+        }
     }
 }
 
@@ -506,6 +527,7 @@ void DoDistanceSensor(void) {
 void Go() {
     // TODO: Implement other functions with controller
     Mode = 1;
+    MaxSpeed = 0;
 
     // Inform GUI that race is starting
     char dataStr[10];
@@ -590,15 +612,13 @@ void SysTick_HandlerMain() {
 
         break;
     case 4:
-
         // Handle bump
-        /*
         if (Bump_Read()) {
             Mode = 0;
             Motor_Stop();
             Pause();
             SendMQTT("ECE1188ThorCrash", "", 1);
-        }*/
+        }
         break;
     case 5:
         break;
@@ -844,6 +864,7 @@ int main(int argc, char** argv)
     EnableInterrupts();
 
     Reflectance_Init();
+    Bump_Init();
 
     // Distance Sensor Init
     I2CB1_Init(30); // baud rate = 12MHz/30=400kHz
