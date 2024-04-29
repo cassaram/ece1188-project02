@@ -266,7 +266,7 @@ int32_t SetPoint = 250; // mm //was 250
 int32_t LeftDistance,CenterDistance,RightDistance; // mm
 #define TOOFAR 500 // was 400
 
-#define PWMNOMINAL 5000 // was 2500
+#define PWMNOMINAL 7000 // was 2500
 #define SWING 3000 //was 1000
 #define PWMMIN (PWMNOMINAL-SWING)
 #define PWMMAX (PWMNOMINAL+SWING)
